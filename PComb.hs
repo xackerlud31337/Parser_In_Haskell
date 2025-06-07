@@ -15,12 +15,12 @@ data Stream = Stream [Char] deriving (Eq, Show)
 --FP1.1 by <Ivan Mandev>
 newtype Parser a = Parser { runParser :: Stream -> [(a,Stream)]}
 
--- FP1.2 by Ivan Mandev
+-- FP1.2 by <Ivan Mandev>
 instance Functor Parser where
   fmap f (Parser pa) = Parser $ \inp ->
     [ (f x, rest) | (x, rest) <- pa inp ]
 
---FP1.3 by Ivan Mandev
+--FP1.3 by <Ivan Mandev>
 char :: Char -> Parser Char
 char c = Parser $ \inp@(Stream xs) -> char' xs
     where
@@ -29,16 +29,16 @@ char c = Parser $ \inp@(Stream xs) -> char' xs
             | d == c = [(c, Stream ds)]
             | otherwise = []
 
---FP1.4 by Ivan Mandev
+--FP1.4 by <Ivan Mandev>
 failure :: Parser a
 failure = Parser $ const []
 
---FP1.5 by Ivan Mandev
+--FP1.5 by <Ivan Mandev>
 instance Applicative Parser where
     pure x = Parser $ \inp -> [(x, inp)]
     (Parser pf) <*> (Parser pa) = Parser $ \inp -> [(f x, rest2) | (f, rest1) <- pf inp, (x, rest2) <- pa rest1]
 
---FP1.6 by Ivan Mandev
+--FP1.6 by <Ivan Mandev>
 instance Alternative Parser where
     empty = failure
     (Parser p1) <|> (Parser p2) = Parser $ \inp -> 
