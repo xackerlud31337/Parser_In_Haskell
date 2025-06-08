@@ -233,5 +233,75 @@ prop_eleven_eval =
 -- prop_prettyProg_idempotent =
 --   lines (pretty fib) == ["fib n := if (n < 3) then { 1 } else { (fib(n - 1) + fib(n - 2)) };"]
 
+--FP5.1–5.5 by <Darius Luca>
+parseProg :: Parser Prog
+parseProg = Prog <$> some parseFunc
+
+parseFunc :: Parser Func
+parseFunc =
+  Func <$> identifier
+       <*> many parseArg
+       <*  symbol ":="
+       <*> parseExpr
+       <*  symbol ";"
+
+parseArg :: Parser (Either Name Int)
+parseArg = (Left <$> identifier)
+       <|> (Right . fromIntegral <$> integer)
+
+parseExpr :: Parser Expr
+parseExpr = parseAddSub
+
+-- left-assoc +/-
+parseAddSub :: Parser Expr
+parseAddSub = chainl1 parseMul (addOp <|> subOp)
+
+-- left-assoc *
+parseMul :: Parser Expr
+parseMul = chainl1 parseFactor mulOp
+
+parseFactor :: Parser Expr
+parseFactor =
+      parseIf
+  <|> parseCall
+  <|> (Numb . fromIntegral <$> integer)
+  <|> (Var <$> identifier)
+  <|> parens parseExpr
+
+parseCall :: Parser Expr
+parseCall =
+  Call <$> identifier
+       <*> parens (sep parseExpr (symbol ","))
+
+parseIf :: Parser Expr
+parseIf =
+  (\(e1,op,e2) e3 e4 -> If e1 op e2 e3 e4)
+    <$> (symbol "if"   *> parens ((,,) <$> parseExpr <*> parseOp <*> parseExpr))
+    <*> (symbol "then" *> braces parseExpr)
+    <*> (symbol "else" *> braces parseExpr)
+
+parseOp :: Parser CompOp
+parseOp =  (symbol "<"  *> pure Lt)
+       <|> (symbol ">"  *> pure Gt)
+       <|> (symbol "==" *> pure Eq)
+
+addOp, subOp, mulOp :: Parser (Expr -> Expr -> Expr)
+addOp = symbol "+" *> pure Add
+subOp = symbol "-" *> pure Sub
+mulOp = symbol "*" *> pure Mul
+
+chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
+chainl1 p op = f <$> p <*> many ((,) <$> op <*> p)
+  where
+    f x ys = foldl (\acc (g,y) -> g acc y) x ys
+
+--FP5.6 by <Darius Luca>
+prop_roundtrip :: String -> Bool
+prop_roundtrip t =
+  case runParser parseProg (Stream t) of
+    [(ast, Stream "")] -> pretty ast == t
+    []                 -> True
+    _                  -> False
+
 return []
 check = $quickCheckAll
