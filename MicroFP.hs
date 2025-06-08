@@ -143,7 +143,7 @@ prettyExpr (Sub e1 e2) = prettyExprWrap e1 ++ " - " ++ prettyExprWrap e2
 prettyExpr (Mul e1 e2) = prettyExprWrap e1 ++ " * " ++ prettyExprWrap e2
 prettyExpr (If e1 op e2 e3 e4) =
   "if (" ++ prettyExpr e1 ++ " " ++ prettyCompOp op ++ " " ++ prettyExpr e2 ++ ") then { " ++
-  prettyExpr e3 ++ " } else { " ++ prettyExpr e4 ++ " }"
+  prettyExprWrap e3 ++ " } else { " ++ prettyExprWrap e4 ++ " }"
 
 prettyExprWrap :: Expr -> String
 prettyExprWrap e@(Add _ _) = "(" ++ prettyExpr e ++ ")"
@@ -229,9 +229,9 @@ prop_eleven_eval =
 
 
 -- ! THIS SHOULD BE FIXED
--- prop_prettyProg_idempotent :: Bool
--- prop_prettyProg_idempotent =
---   lines (pretty fib) == ["fib n := if (n < 3) then { 1 } else { (fib(n - 1) + fib(n - 2)) };"]
+prop_prettyProg_idempotent :: Bool
+prop_prettyProg_idempotent =
+  lines (pretty fib) == ["fib n := if (n < 3) then { 1 } else { (fib(n - 1) + fib(n - 2)) };"]
 
 --FP5.1–5.5 by <Darius Luca>
 parseProg :: Parser Prog
