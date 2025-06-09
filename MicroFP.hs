@@ -7,20 +7,23 @@
 
 module MicroFP where
 
+import Prelude hiding (sum) -- sum id duplicating
+
 import Control.Applicative
 import PComb
 import BasicParsers
 import Test.QuickCheck
 import Test.QuickCheck.All
 
+-- import Debug.Trace
+
 {-Currently available: 
-    - 3.1 ,3.2, 3.3, 3.4
-    - fibonacci not working correctly because of pattern matching
+    - 3.1 ,3.2, 3.3, 3.4, 5.2, 5.3
     - twice not working correctly because of higher order functions, changed for the sace of testing to work with inc
 
   To be implemented: 
-    - 5.1,5.2,5.3,5.4,5.5
-    - patmatch
+    - 5.4,5.5
+    - partial application
     - change the eval function so it can take higher order functions
     - change the types in the grammar so we can take higher order functions
 -}
@@ -48,6 +51,12 @@ data Expr
 
 data CompOp = Lt | Gt | Eq
   deriving (Show)
+
+  --FP5.4 (--! Not finished)
+--data Value = VInt Integer | VFun ([Value] -> Value) -- so we can pass a higher order function to use later 
+
+--type Env = [(Name, Value)] --Custom environment type to swap the [(Name, Integer)] on
+
 
 --FP3.2 by <Ivan Gyunderov>
 
@@ -163,16 +172,82 @@ commaSep = foldr1 (\a b -> a ++ ", " ++ b)
 
 --FP3.4 by <Ivan Gyunderov>
 
+  --FP5.2 <Ivan Gyunderov>
+  -- Helper function for pattern matching arguments to actual pattern, returning bind if succ
+  -- Absolutely useless after implementing patmatch
+-- matchArgs :: [Either Name Int] -> [Integer] -> Maybe [(Name, Integer)]
+-- matchArgs [] [] = Just []
+-- matchArgs (Left n : ps) (a:as) = ((n, a):) <$> matchArgs ps as
+-- matchArgs (Right i : ps) (a:as)
+--   | fromIntegral i == a = matchArgs ps as
+--   | otherwise           = Nothing
+-- matchArgs _ _ = Nothing
+
+
+patmatch :: Prog -> Prog
+patmatch (Prog funcs) = Prog (map merge (group funcs))
+  where
+    group [] = []
+    group (f@(Func n _ _) : fs) =
+      let (same, rest) = partition n (f:fs)
+      in same : group rest
+
+    partition _ [] = ([], [])
+    partition n (f@(Func n' _ _) : fs)
+      | n == n'   = let (yes, no) = partition n fs in (f:yes, no)
+      | otherwise = let (yes, no) = partition n fs in (yes, f:no)
+
+    merge (Func fname args body : rest) =
+      let restArgs = tail args
+          varName = case head args of
+                      Left n  -> n
+                      Right _ -> "x"
+          mkIfs [Func _ (arg:_) b] =
+            case arg of
+              Left old -> subst old varName b
+              Right _  -> b
+          mkIfs [Func _ [] b] = b
+          mkIfs (Func _ (Right i : _) b : xs) =
+            If (Var varName) Eq (Numb i) b (mkIfs xs)
+          mkIfs (Func _ (Left old : _) b : xs) =
+            subst old varName b
+      in Func fname (Left varName : restArgs) (mkIfs (Func fname args body : rest))
+
+subst :: Name -> Name -> Expr -> Expr -- helper function to replace the old variable names with the new one in the body. Used to fix unbound variable error produced by calling the evalExpr with the changed functions.
+subst old new expr = case expr of
+  Numb n      -> Numb n
+  Var n       -> Var (if n == old then new else n)
+  Call f es   -> Call f (map (subst old new) es)
+  Add a b     -> Add (subst old new a) (subst old new b)
+  Sub a b     -> Sub (subst old new a) (subst old new b)
+  Mul a b     -> Mul (subst old new a) (subst old new b)
+  If e1 op e2 e3 e4 -> If (subst old new e1) op (subst old new e2) (subst old new e3) (subst old new e4)
+
+  
 eval :: Prog -> String -> [Integer] -> Integer
-eval (Prog funcs) fname args =
-  let Func _ params body = head [f | f@(Func n ps _) <- funcs, n == fname]
-      env = [(v, a) | (Left v, a) <- zip params args]
+eval prog fname args =
+  let Prog funcs = patmatch prog
+      Func _ params body = head [f | f@(Func n _ _) <- funcs, n == fname]
+      env = [ (n, a) | (Left n, a) <- zip params args ]
   in evalExpr (Prog funcs) env body
+
+
+-- Old eval function, debugging and used for the matchArgs
+-- eval :: Prog -> String -> [Integer] -> Integer
+-- eval (Prog funcs) fname args =
+--   let matchFuncs = [ (body, env)
+--                    | Func n params body <- funcs
+--                    , Just env <- [matchArgs params args]
+--                    , n == fname
+--                    ]
+--       (body, env) = traceShow (head matchFuncs) (head matchFuncs) -- get the first possible pattern  --! Remove debug output -> (body, env) = head matchFuncs 
+--   in evalExpr (Prog funcs) env body
 
 evalExpr :: Prog -> [(Name, Integer)] -> Expr -> Integer
 evalExpr prog env expr = case expr of
   Numb n      -> fromIntegral n
-  Var n       -> case lookup n env of Just v -> v
+  Var n       -> case lookup n env of 
+                      Just v -> v
   Add a b     -> evalExpr prog env a + evalExpr prog env b
   Sub a b     -> evalExpr prog env a - evalExpr prog env b
   Mul a b     -> evalExpr prog env a * evalExpr prog env b
@@ -185,6 +260,9 @@ evalExpr prog env expr = case expr of
           Eq -> v1 == v2
     in if cond then evalExpr prog env e3 else evalExpr prog env e4
   Call fn es  -> eval prog fn (map (evalExpr prog env) es)
+
+
+
 
 -- QuickCheck: all prop_* tests
 
@@ -227,81 +305,79 @@ prop_eleven_eval =
         ]
   in eval elevenProg "eleven" [] == 11
 
-
--- ! THIS SHOULD BE FIXED
 prop_prettyProg_idempotent :: Bool
 prop_prettyProg_idempotent =
   lines (pretty fib) == ["fib n := if (n < 3) then { 1 } else { (fib(n - 1) + fib(n - 2)) };"]
 
---FP5.1–5.5 by <Darius Luca>
-parseProg :: Parser Prog
-parseProg = Prog <$> some parseFunc
+-- --FP5.1–5.5 by <Darius Luca>
+-- parseProg :: Parser Prog
+-- parseProg = Prog <$> some parseFunc
 
-parseFunc :: Parser Func
-parseFunc =
-  Func <$> identifier
-       <*> many parseArg
-       <*  symbol ":="
-       <*> parseExpr
-       <*  symbol ";"
+-- parseFunc :: Parser Func
+-- parseFunc =
+--   Func <$> identifier
+--        <*> many parseArg
+--        <*  symbol ":="
+--        <*> parseExpr
+--        <*  symbol ";"
 
-parseArg :: Parser (Either Name Int)
-parseArg = (Left <$> identifier)
-       <|> (Right . fromIntegral <$> integer)
+-- parseArg :: Parser (Either Name Int)
+-- parseArg = (Left <$> identifier)
+--        <|> (Right . fromIntegral <$> integer)
 
-parseExpr :: Parser Expr
-parseExpr = parseAddSub
+-- parseExpr :: Parser Expr
+-- parseExpr = parseAddSub
 
--- left-assoc +/-
-parseAddSub :: Parser Expr
-parseAddSub = chainl1 parseMul (addOp <|> subOp)
+-- -- left-assoc +/-
+-- parseAddSub :: Parser Expr
+-- parseAddSub = chainl1 parseMul (addOp <|> subOp)
 
--- left-assoc *
-parseMul :: Parser Expr
-parseMul = chainl1 parseFactor mulOp
+-- -- left-assoc *
+-- parseMul :: Parser Expr
+-- parseMul = chainl1 parseFactor mulOp
 
-parseFactor :: Parser Expr
-parseFactor =
-      parseIf
-  <|> parseCall
-  <|> (Numb . fromIntegral <$> integer)
-  <|> (Var <$> identifier)
-  <|> parens parseExpr
+-- parseFactor :: Parser Expr
+-- parseFactor =
+--       parseIf
+--   <|> parseCall
+--   <|> (Numb . fromIntegral <$> integer)
+--   <|> (Var <$> identifier)
+--   <|> parens parseExpr
 
-parseCall :: Parser Expr
-parseCall =
-  Call <$> identifier
-       <*> parens (sep parseExpr (symbol ","))
+-- parseCall :: Parser Expr
+-- parseCall =
+--   Call <$> identifier
+--        <*> parens (sep parseExpr (symbol ","))
 
-parseIf :: Parser Expr
-parseIf =
-  (\(e1,op,e2) e3 e4 -> If e1 op e2 e3 e4)
-    <$> (symbol "if"   *> parens ((,,) <$> parseExpr <*> parseOp <*> parseExpr))
-    <*> (symbol "then" *> braces parseExpr)
-    <*> (symbol "else" *> braces parseExpr)
+-- parseIf :: Parser Expr
+-- parseIf =
+--   (\(e1,op,e2) e3 e4 -> If e1 op e2 e3 e4)
+--     <$> (symbol "if"   *> parens ((,,) <$> parseExpr <*> parseOp <*> parseExpr))
+--     <*> (symbol "then" *> braces parseExpr)
+--     <*> (symbol "else" *> braces parseExpr)
 
-parseOp :: Parser CompOp
-parseOp =  (symbol "<"  *> pure Lt)
-       <|> (symbol ">"  *> pure Gt)
-       <|> (symbol "==" *> pure Eq)
+-- parseOp :: Parser CompOp
+-- parseOp =  (symbol "<"  *> pure Lt)
+--        <|> (symbol ">"  *> pure Gt)
+--        <|> (symbol "==" *> pure Eq)
 
-addOp, subOp, mulOp :: Parser (Expr -> Expr -> Expr)
-addOp = symbol "+" *> pure Add
-subOp = symbol "-" *> pure Sub
-mulOp = symbol "*" *> pure Mul
+-- addOp, subOp, mulOp :: Parser (Expr -> Expr -> Expr)
+-- addOp = symbol "+" *> pure Add
+-- subOp = symbol "-" *> pure Sub
+-- mulOp = symbol "*" *> pure Mul
 
-chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
-chainl1 p op = f <$> p <*> many ((,) <$> op <*> p)
-  where
-    f x ys = foldl (\acc (g,y) -> g acc y) x ys
+-- chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
+-- chainl1 p op = f <$> p <*> many ((,) <$> op <*> p)
+--   where
+--     f x ys = foldl (\acc (g,y) -> g acc y) x ys
 
---FP5.6 by <Darius Luca>
-prop_roundtrip :: String -> Bool
-prop_roundtrip t =
-  case runParser parseProg (Stream t) of
-    [(ast, Stream "")] -> pretty ast == t
-    []                 -> True
-    _                  -> False
+-- --FP5.6 by <Darius Luca>
+-- prop_roundtrip :: String -> Bool
+-- prop_roundtrip t =
+--   case runParser parseProg (Stream t) of
+--     [(ast, Stream "")] -> pretty ast == t
+--     []                 -> True
+--     _                  -> False
 
 return []
 check = $quickCheckAll
