@@ -8,6 +8,7 @@
 module MicroFP where
 
 import Prelude hiding (sum) -- sum id duplicating
+import Data.Foldable (foldl)
 
 import Control.Applicative
 import PComb
@@ -309,75 +310,72 @@ prop_prettyProg_idempotent :: Bool
 prop_prettyProg_idempotent =
   lines (pretty fib) == ["fib n := if (n < 3) then { 1 } else { (fib(n - 1) + fib(n - 2)) };"]
 
--- --FP5.1–5.5 by <Darius Luca>
--- parseProg :: Parser Prog
--- parseProg = Prog <$> some parseFunc
 
--- parseFunc :: Parser Func
--- parseFunc =
---   Func <$> identifier
---        <*> many parseArg
---        <*  symbol ":="
---        <*> parseExpr
---        <*  symbol ";"
+chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a -- helper function so we can do left associativity
+chainl1 p op =
+  let step x (f,y) = f x y
+      rest        = many ((,) <$> op <*> p)
+  in  foldl step <$> p <*> rest
 
--- parseArg :: Parser (Either Name Int)
--- parseArg = (Left <$> identifier)
---        <|> (Right . fromIntegral <$> integer)
+compOp :: Parser CompOp
+compOp =
+      (Eq <$ symbol "==")
+  <|> (Lt <$ symbol "<")
+  <|> (Gt <$ symbol ">")
 
--- parseExpr :: Parser Expr
--- parseExpr = parseAddSub
+ifExpr :: Parser Expr
+ifExpr =
+  let head = symbol "if" *> parens ((,,) <$> expr <*> compOp <*> expr)
+      build  = \(e1,o,e2) e3 e4 -> If e1 o e2 e3 e4
+  in  build <$> head
+            <*> (symbol "then" *> braces expr)
+            <*> (symbol "else" *> braces expr)
 
--- -- left-assoc +/-
--- parseAddSub :: Parser Expr
--- parseAddSub = chainl1 parseMul (addOp <|> subOp)
+callOrVar :: Parser Expr
+callOrVar =
+      Call <$> identifier
+           <*> parens (sep expr (symbol ","))
+  <|> Var  <$> identifier
 
--- -- left-assoc *
--- parseMul :: Parser Expr
--- parseMul = chainl1 parseFactor mulOp
+factor :: Parser Expr
+factor =
+      ifExpr
+  <|> Numb . fromIntegral <$> integer
+  <|> callOrVar
+  <|> parens expr
 
--- parseFactor :: Parser Expr
--- parseFactor =
---       parseIf
---   <|> parseCall
---   <|> (Numb . fromIntegral <$> integer)
---   <|> (Var <$> identifier)
---   <|> parens parseExpr
+term :: Parser Expr
+term = chainl1 factor (Mul <$ symbol "*")
 
--- parseCall :: Parser Expr
--- parseCall =
---   Call <$> identifier
---        <*> parens (sep parseExpr (symbol ","))
+expr :: Parser Expr
+expr = chainl1 term ((Add <$ symbol "+") <|> (Sub <$ symbol "-"))
 
--- parseIf :: Parser Expr
--- parseIf =
---   (\(e1,op,e2) e3 e4 -> If e1 op e2 e3 e4)
---     <$> (symbol "if"   *> parens ((,,) <$> parseExpr <*> parseOp <*> parseExpr))
---     <*> (symbol "then" *> braces parseExpr)
---     <*> (symbol "else" *> braces parseExpr)
+args :: Parser (Either Name Int)
+args = Right . fromIntegral <$> integer <|> Left  <$> identifier
 
--- parseOp :: Parser CompOp
--- parseOp =  (symbol "<"  *> pure Lt)
---        <|> (symbol ">"  *> pure Gt)
---        <|> (symbol "==" *> pure Eq)
+funcParser :: Parser Func
+funcParser =
+  Func
+    <$> identifier
+    <*> many args
+    <*  symbol ":="
+    <*> expr
+    <*  symbol ";"
 
--- addOp, subOp, mulOp :: Parser (Expr -> Expr -> Expr)
--- addOp = symbol "+" *> pure Add
--- subOp = symbol "-" *> pure Sub
--- mulOp = symbol "*" *> pure Mul
+progParser :: Parser Prog
+progParser = skipSpaces *> (Prog <$> many (funcParser <* skipSpaces))
 
--- chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
--- chainl1 p op = f <$> p <*> many ((,) <$> op <*> p)
---   where
---     f x ys = foldl (\acc (g,y) -> g acc y) x ys
+compile :: String -> Prog
+compile s =
+  case runParser (progParser <* skipSpaces) (Stream s) of
+    [(p, Stream [])] -> p
 
--- --FP5.6 by <Darius Luca>
--- prop_roundtrip :: String -> Bool
--- prop_roundtrip t =
---   case runParser parseProg (Stream t) of
---     [(ast, Stream "")] -> pretty ast == t
---     []                 -> True
---     _                  -> False
+runFile :: FilePath -> [Integer] -> IO Integer
+runFile path args = do
+  src         <- readFile path
+  let Prog fs       = compile src
+      Func f _ _    = last fs -- so we compile only the last (in our case "main")
+  pure (eval (Prog fs) f args)
 
 return []
 check = $quickCheckAll
